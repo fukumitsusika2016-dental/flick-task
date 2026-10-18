@@ -16,8 +16,10 @@
     }
   ],
   "ai": { "binding": "AI" },
+  // 使える人（ALLOWED_EMAILS）とGoogleの鍵は wrangler secret で入れる（GitHubに書かない）
   "vars": {
-    "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+    "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "AI_DAILY_LIMIT": "100"
   },
   "observability": { "enabled": true },
 
@@ -32,6 +34,7 @@
       "vars": {
         "AI_MODEL": "mock",
         "AI_MOCK": "1",
+        "AI_DAILY_LIMIT": "30",
         "DEV_LOGIN": "1",
         "GOOGLE_CLIENT_ID": "test-client.apps.googleusercontent.com",
         "GOOGLE_CLIENT_SECRET": "test-secret"

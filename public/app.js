@@ -5,7 +5,7 @@
 
   const $ = (s, el = document) => el.querySelector(s);
   const STATUSES = ['todo', 'doing', 'done'];
-  const LS = { tasks: 'flick.tasks', ops: 'flick.ops', draft: 'flick.draft', tab: 'flick.tab', user: 'flick.user' };
+  const LS = { tasks: 'flick.tasks', ops: 'flick.ops', draft: 'flick.draft', tab: 'flick.tab', user: 'flick.user', owner: 'flick.owner' };
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const store = {
@@ -139,15 +139,22 @@
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify({ puts, dels }),
+        // owner：この端末のデータの持ち主。別の人がログインしたら、サーバーは前の人の変更を受け取らない
+        body: JSON.stringify({ puts, dels, owner: store.read(LS.owner, null) }),
       });
       if (epoch !== state.epoch) return;
       if (res.status === 401) { setUser(null); return; }
       if (!res.ok) throw new Error(`sync ${res.status}`);
       const data = await res.json();
       if (epoch !== state.epoch) return;
-      // 送った変更のうち、送信中に上書きされていないものを消す
-      for (const [id, o] of sent) if (state.ops[id] === o) delete state.ops[id];
+      if (data.ownerMismatch) {
+        // 前の人の残りは送らずに捨てる（共用の端末で混ざらないように）
+        state.ops = {};
+      } else {
+        // 送った変更のうち、送信中に上書きされていないものを消す
+        for (const [id, o] of sent) if (state.ops[id] === o) delete state.ops[id];
+      }
+      store.write(LS.owner, data.user.id);
       const next = new Map(data.tasks.map((t) => [t.id, t]));
       for (const [id, o] of Object.entries(state.ops)) {
         if (o.op === 'put') next.set(id, o.task); else next.delete(id);
@@ -198,19 +205,42 @@
   }
 
   $('#account').addEventListener('click', () => openSheet($('#account-sheet')));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // 未送信の変更を送り切る（最大3回）
+  async function flush() {
+    for (let i = 0; i < 3 && Object.keys(state.ops).length; i++) {
+      while (state.syncing) await sleep(50);
+      clearTimeout(syncTimer);
+      await sync();
+    }
+  }
+
   $('#logout').addEventListener('click', async () => {
-    try { await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* noop */ }
+    await flush();
+    if (Object.keys(state.ops).length) {
+      toast(`未送信の変更が${Object.keys(state.ops).length}件あります`, 'それでもログアウト', logout);
+      return;
+    }
+    logout();
+  });
+
+  async function logout() {
+    let ok = false;
+    try { ok = (await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })).ok; } catch { /* 圏外 */ }
+    if (!ok) { toast('ログアウトできませんでした。通信を確認してください'); return; }
     // 共用の端末でも残らないように、この端末のタスクも消す
     state.epoch++;
     clearTimeout(syncTimer);
     state.tasks.clear();
     state.ops = {};
+    store.remove(LS.owner);
     persist();
     render();
     setUser(null);
     await closeSheet($('#account-sheet'));
     toast('ログアウトしました');
-  });
+  }
 
   /* ---------- 全画面スケルトン ---------- */
   let isReady = false;
@@ -406,7 +436,9 @@
       if (lock === null && !cancelled) { openEditor(li.dataset.id); return; }
       if (lock !== 'x') return;
       const last = samples[samples.length - 1], first = samples[0];
-      const v = last && first && last.t > first.t ? (last.x - first.x) / (last.t - first.t) : 0; // px/ms
+      // 指を止めてから離したときは「払った」とみなさない
+      const idle = last ? performance.now() - last.t : Infinity;
+      const v = idle < 80 && last.t > first.t ? (last.x - first.x) / (last.t - first.t) : 0; // px/ms
       const w = card.offsetWidth;
       const flick = Math.abs(v) > 0.55 && Math.sign(v) === Math.sign(dx) && Math.abs(dx) > 30;
       if (!cancelled && (Math.abs(dx) > w * 0.33 || flick)) commit(li, Math.sign(dx));
@@ -530,10 +562,18 @@
 
   /* ---------- Workers AI：メモをタスクに分ける ---------- */
   const aiBtn = $('#ai');
+  // 患者さんの情報らしい言葉。入っていたらAIへ送る前に一度止める（完全には見分けられない）
+  const SENSITIVE = /(さん|様|さま|ちゃん|くん|氏|歳|才|号室|患者|生年月日|保険証|介護度|要介護)/;
+  let confirmedText = null;
   aiBtn.addEventListener('click', async () => {
     const text = memo.value.trim();
     if (!text) return shake();
     if (!state.user) { toast('AIはログインすると使えます', 'ログイン', () => { location.href = '/auth/login'; }); return; }
+    if (SENSITIVE.test(text) && confirmedText !== text) {
+      vibrate(20);
+      toast('患者さんの情報は入っていませんか？', 'このまま送る', () => { confirmedText = text; aiBtn.click(); });
+      return;
+    }
     composer.classList.add('thinking');
     aiBtn.disabled = true;
     try {
@@ -544,6 +584,7 @@
         body: JSON.stringify({ text }),
       });
       if (res.status === 401) { setUser(null); throw new Error('unauthorized'); }
+      if (res.status === 429) { toast('今日のAIの回数を使い切りました'); return; }
       if (!res.ok) throw new Error(`ai ${res.status}`);
       const { tasks } = await res.json();
       if (!tasks || !tasks.length) throw new Error('empty');
@@ -578,7 +619,7 @@
     btn.onclick = action ? () => { hideToast(); action(); } : null;
     toastEl.hidden = false;
     requestAnimationFrame(() => toastEl.classList.add('show'));
-    toastTimer = setTimeout(hideToast, action ? 4500 : 2200);
+    toastTimer = setTimeout(hideToast, action ? 6500 : 2400);
   }
   function hideToast() {
     toastEl.classList.remove('show');
@@ -610,6 +651,11 @@
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleSync(0); });
 
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    // 新しい版が入ったら知らせる（初回のインストールでは出さない）
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController) toast('新しい版があります', '更新', () => location.reload());
+    });
     window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
   }
 })();

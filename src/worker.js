@@ -9,6 +9,8 @@ const ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const MAX_TITLE = 500;
 const MAX_OPS = 200;
 const MAX_TASKS = 5000;
+const MAX_BODY = 200_000; // バイト
+const FUTURE_SKEW = 5 * 60 * 1000; // 端末の時計が進んでいても5分までしか信用しない
 
 export default {
   async fetch(request, env) {
@@ -42,7 +44,12 @@ function parseCookies(request) {
   const out = {};
   for (const part of (request.headers.get('cookie') || '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i <= 0) continue;
+    try {
+      out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    } catch {
+      /* 壊れたCookieは無視 */
+    }
   }
   return out;
 }
@@ -73,6 +80,7 @@ function isLocalHost(url) {
 
 // 別のサイトからの書き込みを断る（Cookie を悪用されないように）
 function sameOrigin(request, url) {
+  if (request.headers.get('sec-fetch-site') === 'cross-site') return false;
   const origin = request.headers.get('origin');
   return !origin || origin === url.origin;
 }
@@ -152,7 +160,7 @@ async function handleAuth(request, env, url) {
 
   // 手元のテスト専用。DEV_LOGIN=1 かつ localhost のときだけ動く（本番では必ず 404）
   if (path === '/auth/dev-login' && request.method === 'GET') {
-    if (env.DEV_LOGIN !== '1' || !isLocalHost(url)) return new Response('Not found', { status: 404 });
+    if (env.DEV_LOGIN !== '1' || !isLocalHost(url) || url.protocol !== 'http:') return new Response('Not found', { status: 404 });
     const email = (url.searchParams.get('email') || 'tester@example.com').slice(0, 100);
     return startSession(env, { id: `dev:${email}`, email, name: email.split('@')[0], picture: '' });
   }
@@ -185,9 +193,13 @@ function decodeJwt(token) {
   }
 }
 
+// 使える人を ALLOWED_EMAILS（カンマ区切り）で限定する。未設定なら誰も入れない（入れ忘れで全員に開かないように）
+// ALLOWED_EMAILS=* のときだけ、Googleアカウントを持つ全員に開く
 function emailAllowed(env, email) {
-  const list = (env.ALLOWED_EMAILS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  return list.length === 0 || list.includes(String(email).toLowerCase());
+  const raw = (env.ALLOWED_EMAILS || '').trim();
+  if (raw === '*') return true;
+  const list = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return list.includes(String(email).toLowerCase());
 }
 
 async function startSession(env, user) {
@@ -225,12 +237,16 @@ async function currentUser(request, env) {
 /* ---------- API ---------- */
 
 async function handleApi(request, env, url) {
-  if (request.method !== 'GET' && !sameOrigin(request, url)) return json({ error: 'forbidden' }, 403);
+  if (request.method !== 'GET') {
+    if (!sameOrigin(request, url)) return json({ error: 'forbidden' }, 403);
+    if (!(request.headers.get('content-type') || '').includes('application/json')) return json({ error: 'unsupported_media_type' }, 415);
+    if (Number(request.headers.get('content-length') || 0) > MAX_BODY) return json({ error: 'too_large' }, 413);
+  }
   const user = await currentUser(request, env);
   if (!user) return json({ error: 'unauthorized' }, 401);
 
   if (url.pathname === '/api/sync' && request.method === 'POST') return sync(request, env, user);
-  if (url.pathname === '/api/ai/organize' && request.method === 'POST') return organize(request, env);
+  if (url.pathname === '/api/ai/organize' && request.method === 'POST') return organize(request, env, user);
   return json({ error: 'not_found' }, 404);
 }
 
@@ -238,7 +254,11 @@ function cleanTask(t) {
   if (!t || typeof t !== 'object' || !ID_RE.test(String(t.id))) return null;
   const title = String(t.title ?? '').trim().slice(0, MAX_TITLE);
   if (!title || !STATUSES.has(t.status)) return null;
-  const num = (v) => (Number.isFinite(Number(v)) ? Math.trunc(Number(v)) : Date.now());
+  const now = Date.now();
+  const num = (v) => {
+    const n = Math.trunc(Number(v));
+    return Number.isFinite(n) && n > 0 ? Math.min(n, now + FUTURE_SKEW) : now;
+  };
   return { id: t.id, title, status: t.status, moved_at: num(t.moved_at), created_at: num(t.created_at), updated_at: num(t.updated_at) };
 }
 
@@ -250,6 +270,9 @@ async function sync(request, env, user) {
   } catch {
     return json({ error: 'bad_request' }, 400);
   }
+  // 端末に前の人（別アカウント）の変更が残っていたら、受け取らずに最新の一覧だけ返す（共用端末対策）
+  const ownerMismatch = typeof body.owner === 'string' && body.owner !== user.id;
+  if (ownerMismatch) body = {};
   const puts = Array.isArray(body.puts) ? body.puts.slice(0, MAX_OPS).map(cleanTask).filter(Boolean) : [];
   const dels = Array.isArray(body.dels) ? body.dels.slice(0, MAX_OPS).filter((id) => ID_RE.test(String(id))) : [];
 
@@ -279,7 +302,7 @@ async function sync(request, env, user) {
   )
     .bind(user.id)
     .all();
-  return json({ user: { email: user.email, name: user.name, picture: user.picture }, tasks: results });
+  return json({ user: { id: user.id, email: user.email, name: user.name, picture: user.picture }, tasks: results, ownerMismatch });
 }
 
 /* ---------- Workers AI：音声入力のメモをタスクに分ける ---------- */
@@ -292,7 +315,7 @@ const AI_SYSTEM = [
   'メモにないことを付け足さないでください。タスクは最大10件。',
 ].join('');
 
-async function organize(request, env) {
+async function organize(request, env, user) {
   let text;
   try {
     text = String((await request.json()).text || '').trim().slice(0, 2000);
@@ -300,6 +323,17 @@ async function organize(request, env) {
     return json({ error: 'bad_request' }, 400);
   }
   if (!text) return json({ error: 'empty' }, 400);
+
+  // 1人1日の上限（無料枠を使い切られないように）
+  const limit = Number(env.AI_DAILY_LIMIT || 100);
+  const day = new Date().toISOString().slice(0, 10);
+  const used = await env.DB.prepare(
+    `INSERT INTO ai_usage (user_id, day, count) VALUES (?, ?, 1)
+     ON CONFLICT(user_id, day) DO UPDATE SET count = count + 1 RETURNING count`
+  )
+    .bind(user.id, day)
+    .first('count');
+  if (used > limit) return json({ error: 'ai_limit' }, 429);
 
   if (env.AI_MOCK === '1') return json({ tasks: mockOrganize(text) });
 

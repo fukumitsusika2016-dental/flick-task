@@ -179,6 +179,8 @@ async function run(base) {
     assert(r3.status === 403, `別サイトからの書き込みが403ではない: ${r3.status}`);
     const r4 = await fetch(`${base}/auth/logout`, { method: 'POST', headers: { origin: 'https://evil.example' } });
     assert(r4.status === 403, `別サイトからのログアウトが403ではない: ${r4.status}`);
+    const r5 = await fetch(`${base}/api/sync`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}' });
+    assert(r5.status === 415, `JSON以外の送信が415ではない: ${r5.status}`);
   });
 
   await test('画面の安全設定（CSPなど）が付いている', async () => {
@@ -254,6 +256,20 @@ async function run(base) {
     assert(c.todo === 1 && c.doing === 0, `少し動かしただけで変わった: ${JSON.stringify(c)}`);
     const tr = await page.locator('.card-wrap', { hasText: '研修の資料を読む' }).locator('.card').evaluate((el) => el.style.transform);
     assert(!tr || tr === 'none', `カードが戻っていない: ${tr}`);
+  });
+
+  await test('指を止めてから離したときは、払ったことにしない（誤操作防止）', async () => {
+    const card = page.locator('.card-wrap', { hasText: '研修の資料を読む' }).locator('.card');
+    const box = await card.boundingBox();
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    for (let i = 1; i <= 3; i++) { await page.mouse.move(x + i * 30, y); await sleep(8); }
+    await sleep(300);
+    await page.mouse.up();
+    await sleep(600);
+    const c = await counts(page);
+    assert(c.todo === 1 && c.doing === 0, `止めてから離したのに変わった: ${JSON.stringify(c)}`);
   });
 
   await test('完了タブで左へフリック → 「進行中」に戻る', async () => {
@@ -344,6 +360,33 @@ async function run(base) {
     await page.screenshot({ path: path.join(SHOTS, '07_ai.png') });
   });
 
+  await test('✨ボタン：患者さんの情報らしき言葉があれば、AIへ送る前に確認する', async () => {
+    const before = (await counts(page)).todo;
+    await page.locator('#memo').fill('Aさんの義歯を調整する');
+    await page.locator('#ai').click();
+    await waitFor(async () => /患者さんの情報/.test(await page.locator('#toast.show').innerText()), '確認が出ない');
+    await sleep(400);
+    assert((await counts(page)).todo === before, '確認の前にAIへ送られた');
+    assert((await page.locator('#memo').inputValue()) === 'Aさんの義歯を調整する', 'メモが消えた');
+    await page.locator('#toast.show .toast-action').click();
+    await waitFor(async () => (await counts(page)).todo === before + 1, '「このまま送る」で送られない', 8000);
+  });
+
+  await test('AIは1人1日の回数に上限がある', async () => {
+    const { ctx, page: p2 } = await newPhone();
+    await login(p2, 'limit@example.com');
+    const statuses = await p2.evaluate(async () => {
+      const out = [];
+      for (let i = 0; i < 31; i++) {
+        const r = await fetch('/api/ai/organize', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: '牛乳を買う' }) });
+        out.push(r.status);
+      }
+      return out;
+    });
+    assert(statuses.slice(0, 30).every((s) => s === 200) && statuses[30] === 429, `上限が効かない: ${statuses.join(',')}`);
+    await ctx.close();
+  });
+
   await test('✨ボタン：メモが空なら何もせず欄を揺らす', async () => {
     await page.locator('#memo').fill('');
     await page.locator('#ai').click();
@@ -429,6 +472,33 @@ async function run(base) {
     assert(anim > 2, `動いているアニメーションが少ない: ${anim}`);
     const ind = await page.locator('.tab-indicator').evaluate((el) => el.style.transform);
     assert(ind === 'translateX(100%)', `タブの印が移動していない: ${ind}`);
+  });
+
+  await test('共用端末：別の人がログインしても、前の人の未送信メモは混ざらない', async () => {
+    const { ctx, page: p } = await newPhone();
+    await login(p, 'staff1@example.com');
+    await ctx.setOffline(true);
+    await addMemo(p, 'スタッフ1の未送信メモ');
+    await ctx.clearCookies(); // ログインの期限切れと同じ状態
+    await ctx.setOffline(false);
+    await login(p, 'staff2@example.com');
+    await sleep(800);
+    const tasks = await serverTasks(p);
+    assert(Array.isArray(tasks) && tasks.length === 0, `前の人のメモが送られた: ${JSON.stringify(tasks)}`);
+    assert((await p.locator('.card-wrap', { hasText: 'スタッフ1の未送信メモ' }).count()) === 0, '前の人のメモが表示されている');
+    await ctx.close();
+  });
+
+  await test('ログアウトの通信に失敗したら、ログアウトしたことにしない', async () => {
+    await mainCtx.setOffline(true);
+    await page.locator('#account').click();
+    await page.waitForSelector('#account-sheet[open]');
+    await page.locator('#logout').click();
+    await waitFor(async () => /ログアウトできませんでした/.test(await page.locator('#toast.show').innerText()), '失敗の通知が出ない');
+    assert(await page.locator('#account').isVisible(), 'ログアウト扱いになった');
+    await mainCtx.setOffline(false);
+    await page.keyboard.press('Escape');
+    await waitFor(async () => !(await page.locator('#account-sheet').evaluate((d) => d.open)), 'シートが閉じない');
   });
 
   /* ---- 10. ログアウト ---- */
