@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#f4f6fb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Flick</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body class="is-loading">
+
+<div class="bg" aria-hidden="true">
+  <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span><span class="blob b4"></span>
+</div>
+
+<!-- メモ欄：HTMLに直接置き、JSを待たずに書き始められるようにする -->
+<form id="composer" class="composer glass" autocomplete="off">
+  <textarea id="memo" name="memo" rows="1" placeholder="メモ" aria-label="メモ" enterkeyhint="send" autofocus></textarea>
+  <button type="button" id="ai" class="icon-btn ai" aria-label="AIでタスクに分ける" title="AIでタスクに分ける">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l1.9 5.6 5.6 1.9-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></svg>
+  </button>
+  <button type="submit" id="add" class="icon-btn add" aria-label="追加" title="追加">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/></svg>
+  </button>
+</form>
+
+<div id="app" class="app">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="9"/><path d="M10 16.5l4 4 8-9"/></svg>
+      <span>Flick</span>
+    </div>
+    <a id="login" class="pill glass" href="/auth/login" hidden>
+      <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h11.8c-.5 2.8-2.1 5.1-4.4 6.7v5.6h7.1c4.2-3.8 6.6-9.5 6.6-16.3z"/><path fill="#34A853" d="M24 46c5.9 0 10.9-2 14.5-5.3l-7.1-5.6c-2 1.3-4.5 2.1-7.4 2.1-5.7 0-10.5-3.8-12.2-9H4.5v5.8C8.1 41.1 15.5 46 24 46z"/><path fill="#FBBC05" d="M11.8 28.2c-.4-1.3-.7-2.7-.7-4.2s.3-2.9.7-4.2V14H4.5C3 17 2.2 20.4 2.2 24s.8 7 2.3 10l7.3-5.8z"/><path fill="#EA4335" d="M24 10.8c3.2 0 6.1 1.1 8.4 3.3l6.3-6.3C34.9 4.2 29.9 2 24 2 15.5 2 8.1 6.9 4.5 14l7.3 5.8c1.7-5.2 6.5-9 12.2-9z"/></svg>
+      <span>ログイン</span>
+    </a>
+    <button id="account" class="avatar glass" type="button" aria-label="アカウント" hidden></button>
+  </header>
+
+  <nav class="tabs glass" role="tablist" aria-label="ステータス">
+    <span class="tab-indicator" aria-hidden="true"></span>
+    <button class="tab" role="tab" type="button" data-status="todo" aria-selected="true"><span>未着手</span><b class="count" data-count="todo">0</b></button>
+    <button class="tab" role="tab" type="button" data-status="doing" aria-selected="false"><span>進行中</span><b class="count" data-count="doing">0</b></button>
+    <button class="tab" role="tab" type="button" data-status="done" aria-selected="false"><span>完了</span><b class="count" data-count="done">0</b></button>
+  </nav>
+
+  <main class="list-wrap">
+    <ul id="list" class="list" aria-label="タスク"></ul>
+    <div id="empty" class="empty" hidden aria-hidden="true">
+      <svg viewBox="0 0 64 64"><rect x="10" y="10" width="44" height="44" rx="15"/><path d="M23 33l6 6 12-14"/></svg>
+    </div>
+  </main>
+</div>
+
+<!-- 全画面スケルトン -->
+<div id="skeleton" class="skeleton" aria-hidden="true">
+  <div class="sk-top"><span class="sk sk-brand"></span><span class="sk sk-avatar"></span></div>
+  <div class="sk sk-tabs"></div>
+  <div class="sk-list">
+    <div class="sk sk-card"><i></i><i class="short"></i></div>
+    <div class="sk sk-card"><i></i><i class="short"></i></div>
+    <div class="sk sk-card"><i></i><i class="short"></i></div>
+    <div class="sk sk-card"><i></i><i class="short"></i></div>
+    <div class="sk sk-card"><i></i><i class="short"></i></div>
+    <div class="sk sk-card"><i></i><i class="short"></i></div>
+  </div>
+</div>
+
+<div id="toast" class="toast glass" role="status" aria-live="polite" hidden>
+  <span class="toast-text"></span>
+  <button type="button" class="toast-action"></button>
+</div>
+
+<dialog id="sheet" class="sheet glass" aria-label="タスクの編集">
+  <form method="dialog" class="sheet-inner">
+    <span class="grabber" aria-hidden="true"></span>
+    <textarea id="sheet-title" rows="3" aria-label="タスク名" maxlength="500"></textarea>
+    <div class="seg" role="radiogroup" aria-label="ステータス">
+      <button type="button" data-set="todo">未着手</button>
+      <button type="button" data-set="doing">進行中</button>
+      <button type="button" data-set="done">完了</button>
+    </div>
+    <div class="sheet-actions">
+      <button type="button" id="sheet-delete" class="btn danger">削除</button>
+      <button type="submit" class="btn primary">閉じる</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="account-sheet" class="sheet glass" aria-label="アカウント">
+  <form method="dialog" class="sheet-inner">
+    <span class="grabber" aria-hidden="true"></span>
+    <div class="who"><span class="avatar big" id="who-avatar"></span><div><b id="who-name"></b><small id="who-email"></small></div></div>
+    <div class="sheet-actions">
+      <button type="button" id="logout" class="btn danger">ログアウト</button>
+      <button type="submit" class="btn primary">閉じる</button>
+    </div>
+  </form>
+</dialog>
+
+</body>
+</html>

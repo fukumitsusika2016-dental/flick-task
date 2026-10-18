@@ -1,0 +1,16 @@
+{
+  "name": "flick-task",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mobile-first task app on Cloudflare Workers + D1 + Workers AI",
+  "scripts": {
+    "dev": "wrangler d1 migrations apply flick-task --local && wrangler dev",
+    "test": "node tests/run.cjs",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply flick-task --remote"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1",
+    "wrangler": "4.151.1"
+  }
+}

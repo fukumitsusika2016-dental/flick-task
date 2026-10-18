@@ -1,0 +1,8 @@
+# 手元で動かすときの設定（.dev.vars にコピーして使う。.dev.vars は GitHub に上げない）
+# テスト用ログイン（localhost のときだけ有効）
+DEV_LOGIN=1
+# AIの代わりに簡単な区切りで返す（Cloudflareにログインしなくてもテストできる）
+AI_MOCK=1
+# 本物のGoogleログインを手元で試すときだけ
+# GOOGLE_CLIENT_ID=
+# GOOGLE_CLIENT_SECRET=
