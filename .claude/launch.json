@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "flick-local",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/local.cjs"],
+      "port": 8787
+    }
+  ]
+}

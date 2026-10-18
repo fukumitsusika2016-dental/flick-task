@@ -1,6 +1,6 @@
 // オフラインでも開けるように、画面の部品を端末に保存する
 // ※ public/ の中身を変えて公開するときは、この版の数字を上げる
-const CACHE = 'flick-v2';
+const CACHE = 'flick-v3';
 const SHELL = ['/', '/style.css', '/app.js', '/icon.svg', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {

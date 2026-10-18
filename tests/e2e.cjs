@@ -324,6 +324,21 @@ async function run(base) {
     await waitFor(async () => (await counts(page)).todo === 1, '元に戻らない');
   });
 
+  await test('動きが止まっても（別アプリへ切り替えなど）、フリックは途中で止まらず完了する', async () => {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Animation.enable');
+    await cdp.send('Animation.setPlaybackRate', { playbackRate: 0 }); // 画面の動きを全部止める
+    await page.locator('.card-wrap', { hasText: '研修の資料を読む' }).locator('.card').focus();
+    await page.keyboard.press('ArrowRight');
+    await sleep(1200);
+    await cdp.send('Animation.setPlaybackRate', { playbackRate: 1 });
+    const c = await counts(page);
+    assert(c.doing === 1 && c.todo === 0, `動きが止まると完了しない: ${JSON.stringify(c)}`);
+    await page.locator('#toast.show .toast-action').click();
+    await waitFor(async () => (await counts(page)).todo === 1, '元に戻らない');
+    await cdp.detach();
+  });
+
   /* ---- 6. 編集シート ---- */
   await test('タップで編集シートが開き、名前とステータスを変えられる', async () => {
     await page.locator('.tab[data-status="todo"]').click();

@@ -7,6 +7,9 @@
   const STATUSES = ['todo', 'doing', 'done'];
   const LS = { tasks: 'flick.tasks', ops: 'flick.ops', draft: 'flick.draft', tab: 'flick.tab', user: 'flick.user', owner: 'flick.owner' };
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // 動きの終わりを待つ。ただし画面の描画が止まっても（別アプリへ切り替えなど）、決まった時間で必ず先へ進む
+  const settle = (anim, ms) => Promise.race([anim.finished.catch(() => {}), sleep(ms)]);
 
   const store = {
     read(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
@@ -205,8 +208,6 @@
   }
 
   $('#account').addEventListener('click', () => openSheet($('#account-sheet')));
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
   // 未送信の変更を送り切る（最大3回）
   async function flush() {
     for (let i = 0; i < 3 && Object.keys(state.ops).length; i++) {
@@ -248,6 +249,9 @@
     if (isReady) return;
     isReady = true;
     document.body.classList.remove('is-loading');
+    // 消えたあとのスケルトンは止めて外す（裏で光の動きを回し続けない）
+    const sk = $('#skeleton');
+    setTimeout(() => { sk.hidden = true; }, 600);
     render({ stagger: true });
     const p = new URLSearchParams(location.search);
     if (p.has('login')) {
@@ -473,11 +477,11 @@
     if (!reduceMotion) {
       const from = getComputedStyle(card).transform;
       card.style.transition = 'none';
-      await card.animate(
+      await settle(card.animate(
         [{ transform: from === 'none' ? 'none' : from, opacity: 1 }, { transform: `translateX(${dir * (w + 60)}px) rotate(${dir * 9}deg)`, opacity: 0 }],
         { duration: 300, easing: 'cubic-bezier(.4,0,.6,1)', fill: 'forwards' }
-      ).finished;
-      await li.animate([{ height: `${li.offsetHeight}px`, marginBottom: '0px' }, { height: '0px', marginBottom: '-12px' }], { duration: 220, easing: 'ease-out', fill: 'forwards' }).finished;
+      ), 400);
+      await settle(li.animate([{ height: `${li.offsetHeight}px`, marginBottom: '0px' }, { height: '0px', marginBottom: '-12px' }], { duration: 220, easing: 'ease-out', fill: 'forwards' }), 320);
     }
     const prev = { ...t };
     if (act === 'delete') {
