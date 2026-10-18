@@ -27,6 +27,9 @@
     epoch: 0, // ログアウトで増やす。通信中だった同期の結果を捨てるため
   };
 
+  // 見本版（サーバーなし。スマホで見た目と操作を試す用）：ログイン・同期をせず、AIは簡易版
+  const DEMO = !!document.querySelector('#app[data-demo]');
+
   const memo = $('#memo');
   const composer = $('#composer');
   const list = $('#list');
@@ -131,6 +134,7 @@
   }
 
   async function sync() {
+    if (DEMO) { setTimeout(() => { setUser(null); $('#login').hidden = true; ready(); }, 700); return; }
     if (state.syncing) { state.syncAgain = true; return; }
     state.syncing = true;
     const epoch = state.epoch;
@@ -572,6 +576,7 @@
   aiBtn.addEventListener('click', async () => {
     const text = memo.value.trim();
     if (!text) return shake();
+    if (DEMO) { await demoAI(text); return; }
     if (!state.user) { toast('AIはログインすると使えます', 'ログイン', () => { location.href = '/auth/login'; }); return; }
     if (SENSITIVE.test(text) && confirmedText !== text) {
       vibrate(20);
@@ -611,6 +616,24 @@
       memo.focus({ preventScroll: true });
     }
   });
+
+  // 見本版のAI：句読点や「あと」「それと」で区切るだけ（本物は Workers AI）
+  async function demoAI(text) {
+    composer.classList.add('thinking');
+    await sleep(900);
+    composer.classList.remove('thinking');
+    const tasks = text.split(/[、。\n]|あと|それと/).map((x) => x.replace(/^(えー|えっと|あの)/, '').trim()).filter((x) => x.length > 1).slice(0, 10);
+    if (!tasks.length) return shake();
+    clearMemo();
+    switchTab('todo', { silent: true });
+    const base = Date.now();
+    for (let i = 0; i < tasks.length; i++) {
+      const t = addTask(tasks[i], base - i);
+      render({ fresh: new Set([t.id]) });
+      if (!reduceMotion) await sleep(110);
+    }
+    toast(`${tasks.length}件のタスクにしました（見本版のAI）`);
+  }
 
   /* ---------- 通知（元に戻す付き） ---------- */
   const toastEl = $('#toast');
@@ -654,7 +677,7 @@
   window.addEventListener('online', () => scheduleSync(0));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleSync(0); });
 
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  if (!DEMO && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     // 新しい版が入ったら知らせる（初回のインストールでは出さない）
     const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
